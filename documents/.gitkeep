@@ -1,0 +1,29 @@
+require('dotenv').config();
+const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+
+async function main() {
+  const questions = [
+    'Do you offer battery storage?',
+    'How much does solar installation cost?',
+    'How long does installation usually take?',
+    'What financing options do you offer?'
+  ];
+
+  for (const question of questions) {
+    const res = await fetch('http://localhost:3000/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: question, sessionId: 'test-session' })
+    });
+
+    const data = await res.json();
+    console.log(`Q: ${question}`);
+    console.log(`A: ${data.reply || data.message || 'No response'}`);
+    console.log('---');
+  }
+}
+
+main().catch((error) => {
+  console.error('Test failed:', error.message);
+  process.exit(1);
+});

@@ -2,156 +2,291 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+const pdf = require('pdf-parse');
+const OpenAI = require('openai');
+const { Pinecone } = require('@pinecone-database/pinecone');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const upload = multer({ storage: multer.memoryStorage() });
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+let pinecone = null;
+let pineconeIndex = null;
+
+const initializePinecone = async () => {
+  try {
+    if (!process.env.PINECONE_API_KEY || !process.env.PINECONE_ENVIRONMENT || !process.env.PINECONE_INDEX) {
+      console.log('⚠ Pinecone not configured. RAG features disabled until env vars are set.');
+      return;
+    }
+
+    pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
+    pineconeIndex = pinecone.Index(process.env.PINECONE_INDEX);
+    console.log('✓ Pinecone connected');
+  } catch (error) {
+    console.error('⚠ Pinecone connection failed:', error.message);
+  }
+};
+
+initializePinecone();
+
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-const faqData = [
-  {
-    id: '1',
-    question: 'How much does a solar panel system cost?',
-    answer: 'Solar system cost depends on roof size, energy usage, and whether you want battery storage. We can provide a custom quote based on your home and goals.'
-  },
-  {
-    id: '2',
-    question: 'Do you provide financing options?',
-    answer: 'Yes. We offer flexible financing, lease options, and payment plans to help make solar more affordable.'
-  },
-  {
-    id: '3',
-    question: 'How long does installation take?',
-    answer: 'Most residential installations are completed in 1 to 3 days, depending on system size and roof conditions.'
-  },
-  {
-    id: '4',
-    question: 'Do you offer battery storage?',
-    answer: 'Yes. We install battery storage solutions that let you store excess energy for use during outages or peak demand hours.'
-  },
-  {
-    id: '5',
-    question: 'What kind of warranty do you provide?',
-    answer: 'We provide manufacturer warranties on equipment and workmanship coverage on installation services.'
-  },
-  {
-    id: '6',
-    question: 'How do I request service or maintenance?',
-    answer: 'You can request service through our support chat, by phone, or by submitting a maintenance request online.'
+const SOLAR_SYSTEM_PROMPT = `You are a professional and friendly solar energy customer support specialist for ${process.env.COMPANY_NAME || 'SunPeak Solar'}.
+
+Your expertise includes:
+- Residential and commercial solar installations
+- Solar panel systems, inverters, and monitoring
+- Battery storage and backup power solutions
+- Solar financing, leases, and purchase options
+- Maintenance, repairs, and warranty information
+- Energy efficiency and solar incentives
+- Installation timelines and permits
+
+Key guidelines:
+1. Always be friendly, professional, and helpful.
+2. Provide accurate information based on the company knowledge base.
+3. When customers ask for quotes or pricing, encourage them to submit a consultation request.
+4. For technical issues, suggest troubleshooting steps or recommend a service visit.
+5. Mention financing, tax credits, and incentives when relevant.
+6. Keep responses concise and easy to read.
+7. If you don't know something, be honest and offer to connect them with a specialist.
+8. Offer next steps such as a quote request, consultation, or service request.
+9. Remind customers they can contact the company at ${process.env.COMPANY_EMAIL || 'support@sunpeaksolar.com'} or ${process.env.COMPANY_PHONE || '+1-555-0123'}.
+
+Company Contact Info:
+- Email: ${process.env.COMPANY_EMAIL || 'support@sunpeaksolar.com'}
+- Phone: ${process.env.COMPANY_PHONE || '+1-555-0123'}
+- Website: ${process.env.COMPANY_WEBSITE || 'https://sunpeaksolar.com'}
+`;
+
+const conversationHistory = {};
+
+function getConversationHistory(sessionId) {
+  if (!conversationHistory[sessionId]) conversationHistory[sessionId] = [];
+  return conversationHistory[sessionId];
+}
+
+function chunkText(text, chunkSize = 1200) {
+  const chunks = [];
+  for (let i = 0; i < text.length; i += chunkSize) {
+    const slice = text.slice(i, i + chunkSize);
+    if (slice.trim()) chunks.push(slice.trim());
   }
-];
+  return chunks;
+}
 
-function getBotResponse(message = '') {
-  const input = (message || '').toLowerCase();
+async function searchKnowledge(query) {
+  if (!pineconeIndex) return [];
 
-  if (!input.trim()) {
-    return {
-      reply: 'I can help with solar quotes, installations, batteries, warranties, and service requests. Ask me anything about your solar needs.',
-      intent: 'general_help',
-      suggestedActions: ['Get a solar quote', 'Installation timeline', 'Battery storage options']
-    };
+  try {
+    const embedding = await openai.embeddings.create({
+      model: 'text-embedding-3-small',
+      input: query
+    });
+
+    const vector = embedding.data[0].embedding;
+    const results = await pineconeIndex.query({
+      vector,
+      topK: 3,
+      includeMetadata: true
+    });
+
+    return results.matches
+      .filter(match => match.score > 0.55)
+      .map(match => match.metadata.content || match.metadata.text)
+      .filter(Boolean);
+  } catch (error) {
+    console.error('Knowledge search failed:', error.message);
+    return [];
   }
+}
 
-  if (/quote|pricing|estimate|cost|budget/.test(input)) {
-    return {
-      reply: 'Absolutely! We can help you with a custom solar quote. Please share your home size, monthly energy usage, and whether you are interested in rooftop panels, battery storage, or financing options.',
-      intent: 'quote_request',
-      suggestedActions: ['Request a quote', 'Check financing', 'Learn about installation']
-    };
-  }
-
-  if (/install|installation|roof|rooftop|panel/.test(input)) {
-    return {
-      reply: 'Our team can assess your roof, sunlight exposure, and energy needs to design the best system. Most residential installations are completed in 1–3 days.',
-      intent: 'installation_support',
-      suggestedActions: ['Schedule a site visit', 'See installation timeline', 'Ask about permits']
-    };
-  }
-
-  if (/battery|storage|backup|outage/.test(input)) {
-    return {
-      reply: 'Battery storage is a great option for backup power and energy independence. We can help you choose a system that matches your usage and backup needs.',
-      intent: 'battery_support',
-      suggestedActions: ['Battery options', 'Backup power', 'See outage protection']
-    };
-  }
-
-  if (/maintenance|service|repair|support|issue/.test(input)) {
-    return {
-      reply: 'We offer maintenance and support services for solar systems. Please tell us whether the issue is with panel performance, inverter output, or a service inspection request.',
-      intent: 'service_request',
-      suggestedActions: ['Book service', 'Request support', 'Maintenance checkup']
-    };
-  }
-
-  if (/financ|loan|lease|payment/.test(input)) {
-    return {
-      reply: 'We offer flexible financing plans, solar loans, and lease options. We can help you compare the best payment strategy for your situation.',
-      intent: 'financing_support',
-      suggestedActions: ['Financing options', 'Lease vs buy', 'Monthly payment estimate']
-    };
+async function embedAndStoreText({ text, sourceName }) {
+  if (!pineconeIndex) {
+    throw new Error('Pinecone is not configured. Add PINECONE_API_KEY, PINECONE_ENVIRONMENT, and PINECONE_INDEX to your .env file.');
   }
 
-  if (/warranty|guarantee|coverage/.test(input)) {
-    return {
-      reply: 'Our solar systems include equipment manufacturer warranties and installation workmanship protection. We can review the exact warranty details for your system.',
-      intent: 'warranty_support',
-      suggestedActions: ['Warranty details', 'Maintenance coverage', 'Service support']
-    };
+  const chunks = chunkText(text, 1200);
+  if (!chunks.length) {
+    throw new Error('No readable text found in the uploaded PDF.');
   }
 
-  if (/hello|hi|hey|good morning|good evening/.test(input)) {
-    return {
-      reply: 'Hello! I’m here to help with solar quotes, installations, battery storage, and ongoing support. How can I help today?',
-      intent: 'greeting',
-      suggestedActions: ['Request a quote', 'Ask about installation', 'Talk to a specialist']
-    };
+  const vectors = [];
+
+  for (let i = 0; i < chunks.length; i += 1) {
+    const chunk = chunks[i];
+    const embedding = await openai.embeddings.create({
+      model: 'text-embedding-3-small',
+      input: chunk
+    });
+
+    vectors.push({
+      id: uuidv4(),
+      values: embedding.data[0].embedding,
+      metadata: {
+        source: sourceName,
+        content: chunk,
+        chunkIndex: i,
+        length: chunk.length
+      }
+    });
   }
 
-  const faqMatch = faqData.find(item => {
-    const questionText = item.question.toLowerCase();
-    return input.includes(questionText.split(' ')[0]) || questionText.includes(input.split(' ')[0]);
+  await pineconeIndex.upsert(vectors);
+  return { chunks: chunks.length, sourceName };
+}
+
+async function extractTextFromPdf(buffer, fileName) {
+  const data = await pdf(buffer);
+  const text = (data.text || '').replace(/\s+/g, ' ').trim();
+
+  if (!text) {
+    throw new Error(`No text could be extracted from ${fileName}. Please upload a PDF with selectable text.`);
+  }
+
+  return text;
+}
+
+async function getChatResponse(message, sessionId) {
+  const history = getConversationHistory(sessionId);
+  const relevantDocs = await searchKnowledge(message);
+
+  let knowledgeContext = '';
+  if (relevantDocs.length > 0) {
+    knowledgeContext = `\n\nRelevant company information:\n${relevantDocs.map((doc, index) => `${index + 1}. ${doc.substring(0, 350)}...`).join('\n\n')}`;
+  }
+
+  const systemPrompt = SOLAR_SYSTEM_PROMPT + knowledgeContext;
+
+  const response = await openai.chat.completions.create({
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      ...history,
+      { role: 'user', content: message }
+    ],
+    temperature: 0.7,
+    max_tokens: 500
   });
 
-  if (faqMatch) {
-    return {
-      reply: faqMatch.answer,
-      intent: 'faq_response',
-      suggestedActions: ['Get a solar quote', 'Schedule a consultation', 'Ask another question']
-    };
+  const botMessage = response.choices[0].message.content;
+  history.push({ role: 'user', content: message });
+  history.push({ role: 'assistant', content: botMessage });
+
+  if (history.length > 20) {
+    history.splice(0, 2);
   }
 
-  return {
-    reply: 'Thanks for your message. We can help with solar quotes, system installation, battery options, financing, warranties, and after-sales support. What would you like to know?',
-    intent: 'general_support',
-    suggestedActions: ['Get a quote', 'Book a consultation', 'Maintenance support']
-  };
+  return botMessage;
 }
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', app: 'solar-chatbot-wordpress-api' });
-});
-
-app.get('/api/faqs', (req, res) => {
-  res.json({ faqs: faqData });
-});
-
-app.post('/api/chat', (req, res) => {
-  const { message, customerName } = req.body || {};
-
-  const response = getBotResponse(message);
+  const openaiConfigured = !!process.env.OPENAI_API_KEY;
+  const pineconeConfigured = !!pineconeIndex;
 
   res.json({
-    status: 'success',
-    customerName: customerName || 'Customer',
-    ...response
+    status: 'ok',
+    app: 'solar-chatbot-api-v2',
+    openai_configured: openaiConfigured,
+    pinecone_configured: pineconeConfigured,
+    mode: process.env.NODE_ENV || 'development'
   });
 });
 
+app.get('/api/faqs', (req, res) => {
+  const faqs = [
+    {
+      question: 'How much does a solar panel system cost?',
+      answer: 'Solar system cost depends on roof size, energy usage, and whether you need battery storage. We can provide a custom quote after a site assessment.'
+    },
+    {
+      question: 'Do you offer financing?',
+      answer: 'Yes, we offer financing, leases, and cash purchase options based on your needs and budget.'
+    },
+    {
+      question: 'How long does installation take?',
+      answer: 'Most residential installations are completed in 1-3 days, depending on the system size and permitting timeline.'
+    },
+    {
+      question: 'Do you provide battery backup systems?',
+      answer: 'Yes. We offer battery solutions for backup power and peak-time savings.'
+    }
+  ];
+
+  res.json({ faqs });
+});
+
+app.post('/api/chat', async (req, res) => {
+  const { message, customerName, sessionId } = req.body || {};
+
+  if (!message || message.trim().length === 0) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'Message cannot be empty.'
+    });
+  }
+
+  const sId = sessionId || `visitor_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  try {
+    const reply = await getChatResponse(message, sId);
+    res.json({
+      status: 'success',
+      customerName: customerName || 'Customer',
+      reply,
+      sessionId: sId,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: error.message || 'Failed to process your message.'
+    });
+  }
+});
+
+app.post('/api/upload-pdf', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ status: 'error', message: 'Please upload a PDF file.' });
+    }
+
+    if (!req.file.originalname.toLowerCase().endsWith('.pdf')) {
+      return res.status(400).json({ status: 'error', message: 'Only PDF files are allowed.' });
+    }
+
+    const text = await extractTextFromPdf(req.file.buffer, req.file.originalname);
+    const result = await embedAndStoreText({
+      text,
+      sourceName: req.file.originalname
+    });
+
+    res.json({
+      status: 'success',
+      message: 'PDF uploaded and indexed successfully.',
+      source: req.file.originalname,
+      chunks: result.chunks
+    });
+  } catch (error) {
+    console.error('PDF upload failed:', error.message);
+    res.status(500).json({
+      status: 'error',
+      message: error.message || 'Failed to process the uploaded PDF.'
+    });
+  }
+});
+
 app.post('/api/lead', (req, res) => {
-  const { name, email, phone, service } = req.body || {};
+  const { name, email, phone, service, address, roofArea, monthlyBill } = req.body || {};
 
   if (!name || !email) {
     return res.status(400).json({
@@ -160,15 +295,57 @@ app.post('/api/lead', (req, res) => {
     });
   }
 
+  const lead = {
+    id: `lead_${Date.now()}`,
+    name,
+    email,
+    phone: phone || 'Not provided',
+    service: service || 'general_inquiry',
+    address: address || 'Not provided',
+    roofArea: roofArea || 'Not provided',
+    monthlyBill: monthlyBill || 'Not provided',
+    timestamp: new Date().toISOString(),
+    source: 'website_chatbot'
+  };
+
+  console.log('📋 New lead received:', lead);
+
   res.json({
     status: 'success',
-    message: 'Lead received successfully. Our team will contact you shortly.',
-    lead: {
-      name,
-      email,
-      phone: phone || 'Not provided',
-      service: service || 'general_inquiry'
-    }
+    message: 'Thank you for your inquiry! Our team will contact you within 24 hours.',
+    lead
+  });
+});
+
+app.get('/api/kb-status', async (req, res) => {
+  if (!pineconeIndex) {
+    return res.json({
+      status: 'disconnected',
+      message: 'Pinecone is not configured.'
+    });
+  }
+
+  try {
+    const stats = await pineconeIndex.describeIndexStats();
+    res.json({
+      status: 'connected',
+      totalVectors: stats.totalVectorCount,
+      namespaces: stats.namespaces
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+});
+
+app.get('/api/session/:sessionId/clear', (req, res) => {
+  const { sessionId } = req.params;
+  delete conversationHistory[sessionId];
+  res.json({
+    status: 'success',
+    message: 'Conversation history cleared.'
   });
 });
 
@@ -177,5 +354,10 @@ app.get('*', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Solar chatbot API running on http://localhost:${PORT}`);
+  console.log('\n🌞 Solar chatbot API v2.0');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log(`Running on http://localhost:${PORT}`);
+  console.log(`OpenAI API configured: ${process.env.OPENAI_API_KEY ? 'YES' : 'NO'}`);
+  console.log(`Pinecone configured: ${pineconeIndex ? 'YES' : 'NO'}`);
+  console.log('');
 });

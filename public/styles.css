@@ -1,23 +1,31 @@
 const SolarChat = (() => {
+  let sessionId = null;
+
   function init({ apiUrl, companyName = 'SunPeak Solar', containerId = 'solar-chatbot' }) {
     const container = document.getElementById(containerId);
     if (!container) return;
+
+    sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     const widget = document.createElement('div');
     widget.className = 'solar-chat-widget';
 
     widget.innerHTML = `
       <div class="widget-header">
-        <strong>${companyName}</strong>
-        <span>AI Support</span>
+        <div>
+          <strong>${companyName}</strong>
+          <small>AI support</small>
+        </div>
+        <button class="widget-close" title="Close chat">✕</button>
       </div>
       <div class="widget-body">
-        <div class="widget-message bot">Hi! I can help with solar quotes, installations, and support.</div>
+        <div class="widget-message bot">Hi! I can help with solar quotes, installation, battery backup, and support.</div>
       </div>
       <div class="widget-input-row">
-        <input type="text" class="widget-input" placeholder="Type your message..." />
-        <button class="widget-send">Send</button>
+        <input type="text" class="widget-input" placeholder="Ask about solar..." />
+        <button class="widget-send" title="Send message">→</button>
       </div>
+      <div class="widget-footer">Powered by AI</div>
     `;
 
     container.innerHTML = '';
@@ -26,6 +34,9 @@ const SolarChat = (() => {
     const input = widget.querySelector('.widget-input');
     const body = widget.querySelector('.widget-body');
     const sendButton = widget.querySelector('.widget-send');
+    const closeButton = widget.querySelector('.widget-close');
+
+    let isLoading = false;
 
     const addMessage = (role, text) => {
       const msg = document.createElement('div');
@@ -35,32 +46,63 @@ const SolarChat = (() => {
       body.scrollTop = body.scrollHeight;
     };
 
+    const showLoadingIndicator = () => {
+      const msg = document.createElement('div');
+      msg.id = 'loading-indicator';
+      msg.className = 'widget-message bot loading';
+      msg.innerHTML = '<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>';
+      body.appendChild(msg);
+      body.scrollTop = body.scrollHeight;
+    };
+
+    const removeLoadingIndicator = () => {
+      const loading = document.getElementById('loading-indicator');
+      if (loading) loading.remove();
+    };
+
     const sendMessage = async () => {
       const value = input.value.trim();
-      if (!value) return;
+      if (!value || isLoading) return;
 
+      isLoading = true;
       addMessage('user', value);
       input.value = '';
+      showLoadingIndicator();
 
       try {
         const response = await fetch(`${apiUrl}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: value, customerName: 'Website Visitor' })
+          body: JSON.stringify({
+            message: value,
+            customerName: 'Website Visitor',
+            sessionId
+          })
         });
 
         const data = await response.json();
-        addMessage('bot', data.reply || 'Thanks for contacting us.');
+        removeLoadingIndicator();
+
+        if (response.ok) {
+          addMessage('bot', data.reply || 'Thanks for contacting us.');
+        } else {
+          addMessage('bot', data.message || 'Sorry, I encountered an issue. Please try again.');
+        }
       } catch (error) {
+        removeLoadingIndicator();
         addMessage('bot', 'Unable to reach the support service right now. Please try again later.');
+        console.error('Chat error:', error);
+      } finally {
+        isLoading = false;
       }
     };
 
     input.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') sendMessage();
+      if (event.key === 'Enter' && !isLoading) sendMessage();
     });
 
     sendButton.addEventListener('click', sendMessage);
+    closeButton.addEventListener('click', () => widget.remove());
   }
 
   return { init };

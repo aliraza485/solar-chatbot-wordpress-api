@@ -40,11 +40,11 @@
             <div class="chat-header">
               <div>
                 <strong>Solar Support</strong>
-                <small>Online now</small>
+                <small>AI assistant online</small>
               </div>
             </div>
             <div id="chat-messages" class="chat-messages">
-              <div class="message bot">Hello! I can help with solar quotes, installation, battery storage, and support.</div>
+              <div class="message bot">Hello! I can help with solar quotes, installation, batteries, financing, and support.</div>
             </div>
             <form id="chat-form" class="chat-form">
               <input id="chat-input" type="text" placeholder="Ask about solar panels..." />
@@ -67,6 +67,18 @@
       <div class="feature-card">
         <h3>Expert Support</h3>
         <p>From system design to service requests, our team is ready to help.</p>
+      </div>
+    </section>
+
+    <section class="container tool-section">
+      <div class="tool-box">
+        <h2>Upload company PDFs to the vector knowledge base</h2>
+        <p>Upload PDFs such as pricing sheets, installation guides, or warranty documents.</p>
+        <form id="pdf-form" class="pdf-form">
+          <input type="file" id="pdf-file" accept="application/pdf" required />
+          <button type="submit" class="primary-btn">Upload PDF</button>
+        </form>
+        <div id="pdf-status" class="status-box">No file uploaded yet.</div>
       </div>
     </section>
 
@@ -123,15 +135,15 @@
               const data = await response.json();
               addMessage('bot', data.reply || 'Thanks for contacting us.', messages);
             } catch (error) {
-              addMessage('bot', 'Sorry, I could not reach the support service. Please try again in a moment.', messages);
+              addMessage('bot', 'Sorry, I could not reach the support service. Please try again.', messages);
             }
           });
 
           const leadForm = document.getElementById('lead-form');
           leadForm.addEventListener('submit', async (event) => {
             event.preventDefault();
-            const formData = new FormData(leadForm);
 
+            const formData = new FormData(leadForm);
             const payload = {
               name: formData.get('name'),
               email: formData.get('email'),
@@ -147,10 +159,44 @@
               });
 
               const result = await response.json();
-              alert(result.message || 'Thank you for your inquiry.');
+              alert(result.message || 'Thank you for contacting us.');
               leadForm.reset();
             } catch (error) {
               alert('Unable to submit your request right now. Please try again later.');
+            }
+          });
+
+          const pdfForm = document.getElementById('pdf-form');
+          const pdfStatus = document.getElementById('pdf-status');
+          pdfForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const fileInput = document.getElementById('pdf-file');
+            const file = fileInput.files[0];
+
+            if (!file) {
+              pdfStatus.textContent = 'Please choose a PDF file first.';
+              return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            pdfStatus.textContent = 'Uploading and indexing PDF...';
+
+            try {
+              const response = await fetch(`${apiUrl}/api/upload-pdf`, {
+                method: 'POST',
+                body: formData
+              });
+
+              const data = await response.json();
+              if (response.ok) {
+                pdfStatus.textContent = `${file.name} uploaded successfully. ${data.chunks} processing chunks added to the knowledge base.`;
+              } else {
+                pdfStatus.textContent = data.message || 'Failed to upload PDF.';
+              }
+            } catch (error) {
+              pdfStatus.textContent = 'Upload failed. Please verify Pinecone and OpenAI settings.';
             }
           });
         }
