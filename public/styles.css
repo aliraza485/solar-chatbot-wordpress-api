@@ -1,0 +1,69 @@
+const SolarChat = (() => {
+  function init({ apiUrl, companyName = 'SunPeak Solar', containerId = 'solar-chatbot' }) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const widget = document.createElement('div');
+    widget.className = 'solar-chat-widget';
+
+    widget.innerHTML = `
+      <div class="widget-header">
+        <strong>${companyName}</strong>
+        <span>AI Support</span>
+      </div>
+      <div class="widget-body">
+        <div class="widget-message bot">Hi! I can help with solar quotes, installations, and support.</div>
+      </div>
+      <div class="widget-input-row">
+        <input type="text" class="widget-input" placeholder="Type your message..." />
+        <button class="widget-send">Send</button>
+      </div>
+    `;
+
+    container.innerHTML = '';
+    container.appendChild(widget);
+
+    const input = widget.querySelector('.widget-input');
+    const body = widget.querySelector('.widget-body');
+    const sendButton = widget.querySelector('.widget-send');
+
+    const addMessage = (role, text) => {
+      const msg = document.createElement('div');
+      msg.className = `widget-message ${role}`;
+      msg.textContent = text;
+      body.appendChild(msg);
+      body.scrollTop = body.scrollHeight;
+    };
+
+    const sendMessage = async () => {
+      const value = input.value.trim();
+      if (!value) return;
+
+      addMessage('user', value);
+      input.value = '';
+
+      try {
+        const response = await fetch(`${apiUrl}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: value, customerName: 'Website Visitor' })
+        });
+
+        const data = await response.json();
+        addMessage('bot', data.reply || 'Thanks for contacting us.');
+      } catch (error) {
+        addMessage('bot', 'Unable to reach the support service right now. Please try again later.');
+      }
+    };
+
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') sendMessage();
+    });
+
+    sendButton.addEventListener('click', sendMessage);
+  }
+
+  return { init };
+})();
+
+window.SolarChat = SolarChat;

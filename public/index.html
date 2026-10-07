@@ -1,0 +1,181 @@
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+const faqData = [
+  {
+    id: '1',
+    question: 'How much does a solar panel system cost?',
+    answer: 'Solar system cost depends on roof size, energy usage, and whether you want battery storage. We can provide a custom quote based on your home and goals.'
+  },
+  {
+    id: '2',
+    question: 'Do you provide financing options?',
+    answer: 'Yes. We offer flexible financing, lease options, and payment plans to help make solar more affordable.'
+  },
+  {
+    id: '3',
+    question: 'How long does installation take?',
+    answer: 'Most residential installations are completed in 1 to 3 days, depending on system size and roof conditions.'
+  },
+  {
+    id: '4',
+    question: 'Do you offer battery storage?',
+    answer: 'Yes. We install battery storage solutions that let you store excess energy for use during outages or peak demand hours.'
+  },
+  {
+    id: '5',
+    question: 'What kind of warranty do you provide?',
+    answer: 'We provide manufacturer warranties on equipment and workmanship coverage on installation services.'
+  },
+  {
+    id: '6',
+    question: 'How do I request service or maintenance?',
+    answer: 'You can request service through our support chat, by phone, or by submitting a maintenance request online.'
+  }
+];
+
+function getBotResponse(message = '') {
+  const input = (message || '').toLowerCase();
+
+  if (!input.trim()) {
+    return {
+      reply: 'I can help with solar quotes, installations, batteries, warranties, and service requests. Ask me anything about your solar needs.',
+      intent: 'general_help',
+      suggestedActions: ['Get a solar quote', 'Installation timeline', 'Battery storage options']
+    };
+  }
+
+  if (/quote|pricing|estimate|cost|budget/.test(input)) {
+    return {
+      reply: 'Absolutely! We can help you with a custom solar quote. Please share your home size, monthly energy usage, and whether you are interested in rooftop panels, battery storage, or financing options.',
+      intent: 'quote_request',
+      suggestedActions: ['Request a quote', 'Check financing', 'Learn about installation']
+    };
+  }
+
+  if (/install|installation|roof|rooftop|panel/.test(input)) {
+    return {
+      reply: 'Our team can assess your roof, sunlight exposure, and energy needs to design the best system. Most residential installations are completed in 1–3 days.',
+      intent: 'installation_support',
+      suggestedActions: ['Schedule a site visit', 'See installation timeline', 'Ask about permits']
+    };
+  }
+
+  if (/battery|storage|backup|outage/.test(input)) {
+    return {
+      reply: 'Battery storage is a great option for backup power and energy independence. We can help you choose a system that matches your usage and backup needs.',
+      intent: 'battery_support',
+      suggestedActions: ['Battery options', 'Backup power', 'See outage protection']
+    };
+  }
+
+  if (/maintenance|service|repair|support|issue/.test(input)) {
+    return {
+      reply: 'We offer maintenance and support services for solar systems. Please tell us whether the issue is with panel performance, inverter output, or a service inspection request.',
+      intent: 'service_request',
+      suggestedActions: ['Book service', 'Request support', 'Maintenance checkup']
+    };
+  }
+
+  if (/financ|loan|lease|payment/.test(input)) {
+    return {
+      reply: 'We offer flexible financing plans, solar loans, and lease options. We can help you compare the best payment strategy for your situation.',
+      intent: 'financing_support',
+      suggestedActions: ['Financing options', 'Lease vs buy', 'Monthly payment estimate']
+    };
+  }
+
+  if (/warranty|guarantee|coverage/.test(input)) {
+    return {
+      reply: 'Our solar systems include equipment manufacturer warranties and installation workmanship protection. We can review the exact warranty details for your system.',
+      intent: 'warranty_support',
+      suggestedActions: ['Warranty details', 'Maintenance coverage', 'Service support']
+    };
+  }
+
+  if (/hello|hi|hey|good morning|good evening/.test(input)) {
+    return {
+      reply: 'Hello! I’m here to help with solar quotes, installations, battery storage, and ongoing support. How can I help today?',
+      intent: 'greeting',
+      suggestedActions: ['Request a quote', 'Ask about installation', 'Talk to a specialist']
+    };
+  }
+
+  const faqMatch = faqData.find(item => {
+    const questionText = item.question.toLowerCase();
+    return input.includes(questionText.split(' ')[0]) || questionText.includes(input.split(' ')[0]);
+  });
+
+  if (faqMatch) {
+    return {
+      reply: faqMatch.answer,
+      intent: 'faq_response',
+      suggestedActions: ['Get a solar quote', 'Schedule a consultation', 'Ask another question']
+    };
+  }
+
+  return {
+    reply: 'Thanks for your message. We can help with solar quotes, system installation, battery options, financing, warranties, and after-sales support. What would you like to know?',
+    intent: 'general_support',
+    suggestedActions: ['Get a quote', 'Book a consultation', 'Maintenance support']
+  };
+}
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', app: 'solar-chatbot-wordpress-api' });
+});
+
+app.get('/api/faqs', (req, res) => {
+  res.json({ faqs: faqData });
+});
+
+app.post('/api/chat', (req, res) => {
+  const { message, customerName } = req.body || {};
+
+  const response = getBotResponse(message);
+
+  res.json({
+    status: 'success',
+    customerName: customerName || 'Customer',
+    ...response
+  });
+});
+
+app.post('/api/lead', (req, res) => {
+  const { name, email, phone, service } = req.body || {};
+
+  if (!name || !email) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'Name and email are required.'
+    });
+  }
+
+  res.json({
+    status: 'success',
+    message: 'Lead received successfully. Our team will contact you shortly.',
+    lead: {
+      name,
+      email,
+      phone: phone || 'Not provided',
+      service: service || 'general_inquiry'
+    }
+  });
+});
+
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`Solar chatbot API running on http://localhost:${PORT}`);
+});

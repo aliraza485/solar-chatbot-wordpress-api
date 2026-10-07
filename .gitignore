@@ -1,0 +1,35 @@
+# WordPress embed example
+
+Use this snippet in a WordPress custom HTML block or within a shortcode plugin.
+
+```html
+<div id="solar-chatbot"></div>
+<script src="https://yourdomain.com/chat-widget.js"></script>
+<script>
+  window.SolarChat.init({
+    apiUrl: 'https://yourdomain.com',
+    companyName: 'SunPeak Solar',
+    containerId: 'solar-chatbot'
+  });
+</script>
+```
+
+If you prefer a floating button design, you can also wrap the script in a custom plugin and inject it into the footer of the WordPress site.
+
+## Suggested WordPress plugin approach
+- Create a custom plugin named `sunpeak-solar-chatbot`
+- Enqueue the widget JS in the footer
+- Add a div with id `solar-chatbot`
+- Initialize the script after the div loads
+
+This is a clean way to let the client insert the chatbot without editing theme files directly.
+
+## Example plugin flow
+```php
+<?php
+add_action('wp_footer', function () {
+    echo '<div id="solar-chatbot"></div>';
+    echo '<script src="https://yourdomain.com/chat-widget.js"></script>';
+    echo "<script>window.SolarChat.init({ apiUrl: 'https://yourdomain.com', companyName: 'SunPeak Solar', containerId: 'solar-chatbot' });</script>";
+});
+```
